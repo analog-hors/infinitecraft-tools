@@ -67,7 +67,7 @@ pub fn run(config: Config) {
         for (a, b) in edges(&base, &state) {
             let output = db.combine(a, b, on_api_error);
 
-            if state.contains(&output) || db.element_name(output) == "Nothing" {
+            if base.contains(&output) || state.contains(&output) || db.element_name(output) == "Nothing" {
                 continue;
             }
 
