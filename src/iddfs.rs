@@ -96,39 +96,33 @@ fn iddfs(
 }
 
 fn edges(db: &mut ElementDb, state: &State) -> IndexMap<ElementId, (ElementId, ElementId)> {
-    let mut edges = IndexMap::new();
-    let mut add_pair = |i, j| {
-        let (&a, _) = state.get_index(i).unwrap();
-        let (&b, _) = state.get_index(j).unwrap();
-        let output = db.combine(a, b, on_api_error);
-        if db.element_name(output) != "Nothing" {
-            edges.entry(output).or_insert((a, b));
-        }
-    };
-    match state.last().unwrap() {
+    let next = |i, j| if i < j { (i + 1, j) } else { (0, j + 1) };
+    let (mut i, mut j) = match state.last().unwrap() {
         (_, Some((a, b))) => {
             let a_index = state.get_index_of(a).unwrap();
             let b_index = state.get_index_of(b).unwrap();
-            let max_index = a_index.max(b_index);
-            let min_index = a_index.min(b_index);
-            for j in min_index + 1..max_index + 1 {
-                add_pair(max_index, j);
-            }
-            for i in max_index + 1..state.len() {
-                for j in 0..i + 1 {
-                    add_pair(i, j);
-                }
-            }
+            next(a_index.min(b_index), a_index.max(b_index))
         }
-        (_, None) => {
-            for i in 0..state.len() {
-                for j in i..state.len() {
-                    add_pair(i, j);
-                }
-            }
+        (_, None) => (0, 0),
+    };
+    let iter = std::iter::from_fn(|| loop {
+        if j >= state.len() {
+            return None;
         }
-    }
-    edges
+        
+        let (&a, _) = state.get_index(i).unwrap();
+        let (&b, _) = state.get_index(j).unwrap();
+        let output = db.combine(a, b, on_api_error);
+        (i, j) = next(i, j);
+
+        if db.element_name(output) != "Nothing" {
+            return Some((output, (a, b)));
+        }
+    });
+    iter.fold(IndexMap::new(), |mut edges, (element, derivation)| {
+        edges.entry(element).or_insert(derivation);
+        edges
+    })
 }
 
 fn on_api_error(error: ureq::Error) {
