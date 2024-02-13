@@ -1,10 +1,10 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::collections::hash_map;
 use std::path::Path;
 use std::time::{Instant, Duration};
 
 use clap::Args;
 use indexmap::IndexMap;
-use indexmap::map::Entry;
 
 use crate::db::{ElementDb, ElementId};
 
@@ -40,10 +40,10 @@ pub fn run(config: Config) {
     }
 
     let mut state = base.iter().map(|&e| (e, None)).collect();
+    let mut banned = HashMap::new();
     let mut recipe_depths = HashMap::new();
-    let mut recipe_elements = HashSet::new();
     for depth in 1.. {
-        iddfs(&mut db, &mut state, depth, &mut |db, state| {
+        iddfs(&mut db, &mut state, &mut banned, depth, &mut |db, state| {
             if last_save.elapsed() >= SAVE_INTERVAL {
                 eprintln!("Saving DB...");
                 db.save(db_path);
@@ -52,12 +52,6 @@ pub fn run(config: Config) {
 
             let (&element, _) = state.last().unwrap();
             if *recipe_depths.entry(element).or_insert(depth) != depth {
-                return;
-            }
-            
-            let mut elements = state.keys().copied().collect::<Vec<_>>();
-            elements.sort_unstable();
-            if !recipe_elements.insert(elements) {
                 return;
             }
 
@@ -78,6 +72,7 @@ pub fn run(config: Config) {
 fn iddfs(
     db: &mut ElementDb,
     state: &mut State,
+    banned: &mut HashMap<ElementId, u32>,
     depth: u32,
     on_recipe: &mut impl FnMut(&mut ElementDb, &State)
 ) {
@@ -86,16 +81,35 @@ fn iddfs(
         return;
     }
 
-    for (output, derivation) in edges(db, state) {
-        if let Entry::Vacant(entry) = state.entry(output) {
+    edges(db, state, |db, state, output, derivation| {
+        let banned_entry = banned.entry(output).or_default();
+        *banned_entry += 1;
+        if *banned_entry > 1 {
+            return;
+        }
+        if let indexmap::map::Entry::Vacant(entry) = state.entry(output) {
             entry.insert(Some(derivation));
-            iddfs(db, state, depth - 1, on_recipe);
+            iddfs(db, state, banned, depth - 1, on_recipe);
             state.pop();
         }
-    }
+    });
+    edges(db, state, |_, _, output, _| {
+        if let hash_map::Entry::Occupied(mut entry) = banned.entry(output) {
+            match entry.get_mut() {
+                1 => {
+                    entry.remove();
+                }
+                n => *n -= 1,
+            }
+        }
+    });
 }
 
-fn edges(db: &mut ElementDb, state: &State) -> IndexMap<ElementId, (ElementId, ElementId)> {
+fn edges(
+    db: &mut ElementDb,
+    state: &mut State,
+    mut on_edge: impl FnMut(&mut ElementDb, &mut State, ElementId, (ElementId, ElementId))
+) {
     let next = |i, j| if i < j { (i + 1, j) } else { (0, j + 1) };
     let (mut i, mut j) = match state.last().unwrap() {
         (_, Some((a, b))) => {
@@ -105,24 +119,16 @@ fn edges(db: &mut ElementDb, state: &State) -> IndexMap<ElementId, (ElementId, E
         }
         (_, None) => (0, 0),
     };
-    let iter = std::iter::from_fn(|| loop {
-        if j >= state.len() {
-            return None;
-        }
-        
+    while j < state.len() {
         let (&a, _) = state.get_index(i).unwrap();
         let (&b, _) = state.get_index(j).unwrap();
         let output = db.combine(a, b, on_api_error);
-        (i, j) = next(i, j);
-
         if db.element_name(output) != "Nothing" {
-            return Some((output, (a, b)));
+            on_edge(db, state, output, (a, b));
         }
-    });
-    iter.fold(IndexMap::new(), |mut edges, (element, derivation)| {
-        edges.entry(element).or_insert(derivation);
-        edges
-    })
+
+        (i, j) = next(i, j);
+    }
 }
 
 fn on_api_error(error: ureq::Error) {
