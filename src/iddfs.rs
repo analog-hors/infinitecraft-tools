@@ -9,7 +9,7 @@ use indexmap::IndexMap;
 use crate::db::{ElementDb, ElementId};
 
 #[derive(Debug, Args)]
-/// Do a Breadth-First Search of the state space to find optimal routes
+/// Do an Iterative Deepening Depth-First Search of the state space to find optimal routes
 pub struct Config {
     /// Additional elements to add to the initial state
     #[arg(short, long, num_args(0..))]
