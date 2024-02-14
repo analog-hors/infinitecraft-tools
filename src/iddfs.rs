@@ -18,7 +18,7 @@ pub struct Config {
 
 const SAVE_INTERVAL: Duration = Duration::from_secs(60);
 
-type State = IndexMap<ElementId, Option<(ElementId, ElementId)>>;
+type State = IndexMap<ElementId, Option<((ElementId, ElementId), u32)>>;
 
 pub fn run(config: Config) {
     let db_path = Path::new("db.json");
@@ -40,10 +40,10 @@ pub fn run(config: Config) {
     }
 
     let mut state = base.iter().map(|&e| (e, None)).collect();
-    let mut banned = HashMap::new();
+    let mut banned = base.iter().map(|&e| (e, 1)).collect();
     let mut recipe_depths = HashMap::new();
     for depth in 1.. {
-        iddfs(&mut db, &mut state, &mut banned, depth, &mut |db, state| {
+        iddfs(&mut db, &mut state, &mut banned, base.len() as u32, depth, &mut |db, state| {
             if last_save.elapsed() >= SAVE_INTERVAL {
                 eprintln!("Saving DB...");
                 db.save(db_path);
@@ -56,8 +56,8 @@ pub fn run(config: Config) {
             }
 
             println!("{}", db.element_name(element));
-            for (&output, &derivation) in state.iter() {
-                if let Some((a, b)) = derivation {
+            for (&output, &step) in state.iter() {
+                if let Some(((a, b), _)) = step {
                     let output = db.element_name(output);
                     let a = db.element_name(a);
                     let b = db.element_name(b);
@@ -73,6 +73,7 @@ fn iddfs(
     db: &mut ElementDb,
     state: &mut State,
     banned: &mut HashMap<ElementId, u32>,
+    used: u32,
     depth: u32,
     on_recipe: &mut impl FnMut(&mut ElementDb, &State)
 ) {
@@ -81,16 +82,40 @@ fn iddfs(
         return;
     }
 
-    edges(db, state, |db, state, output, derivation| {
+    if state.len() as u32 - used > depth + 1 {
+        return;
+    }
+
+    edges(db, state, |db, state, output, (a, b)| {
         let banned_entry = banned.entry(output).or_default();
         *banned_entry += 1;
         if *banned_entry > 1 {
             return;
         }
-        if let indexmap::map::Entry::Vacant(entry) = state.entry(output) {
-            entry.insert(Some(derivation));
-            iddfs(db, state, banned, depth - 1, on_recipe);
-            state.pop();
+
+        let mut used = used;
+        if let Some((_, usages)) = state.get_mut(&a).unwrap() {
+            *usages += 1;
+            if *usages == 1 {
+                used += 1;
+            }
+        }
+        if let Some((_, usages)) = state.get_mut(&b).unwrap() {
+            *usages += 1;
+            if *usages == 1 {
+                used += 1;
+            }
+        }
+        
+        state.insert(output, Some(((a, b), 0)));
+        iddfs(db, state, banned, used, depth - 1, on_recipe);
+        state.pop();
+
+        if let Some((_, usages)) = state.get_mut(&a).unwrap() {
+            *usages -= 1;
+        }
+        if let Some((_, usages)) = state.get_mut(&b).unwrap() {
+            *usages -= 1;
         }
     });
     edges(db, state, |_, _, output, _| {
@@ -112,7 +137,7 @@ fn edges(
 ) {
     let next = |i, j| if i < j { (i + 1, j) } else { (0, j + 1) };
     let (mut i, mut j) = match state.last().unwrap() {
-        (_, Some((a, b))) => {
+        (_, Some(((a, b), _))) => {
             let a_index = state.get_index_of(a).unwrap();
             let b_index = state.get_index_of(b).unwrap();
             next(a_index.min(b_index), a_index.max(b_index))
