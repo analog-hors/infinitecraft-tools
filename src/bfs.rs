@@ -7,7 +7,7 @@ use clap::Args;
 use crate::db::{ElementDb, ElementId};
 
 #[derive(Debug, Args)]
-/// Do a Breadth-First Search of the state space to find optimal routes
+/// Do a Breadth-First Search of the state space to find optimal routes (memory intensive, prefer IDDFS)
 pub struct Config {
     /// Additional elements to add to the initial state
     #[arg(short, long, num_args(0..))]
